@@ -1,8 +1,11 @@
 package com.example.pm_capturar_foto
 
 import android.Manifest
+import android.content.ContentValues
+import android.content.Context
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,11 +28,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Color.Companion.White
-import androidx.compose.ui.graphics.ColorFilter.Companion.tint
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -37,8 +37,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.pm_capturar_foto.ui.theme.Pm_capturar_fotoTheme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
-import com.google.accompanist.permissions.rememberPermissionState
-import java.io.File
 import java.util.concurrent.Executor
 
 class MainActivity : ComponentActivity() {
@@ -64,124 +62,120 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun CamaraView() {
-    // Solicita los permisos de la cámara
+
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     val permissions = rememberMultiplePermissionsState(
         permissions = listOf(Manifest.permission.CAMERA)
     )
 
-    // Obtiene el contexto de la actividad
-    val context = LocalContext.current
-    // Crea un controlador de cámara que se vincula a la actividad
-    val camaraController = remember { LifecycleCameraController(context) }
-    // Obtiene el propietario de la vida de la actividad
-    val lifecycle = LocalLifecycleOwner.current
+    val cameraController = remember {
+        LifecycleCameraController(context).apply {
+            setEnabledUseCases(
+                LifecycleCameraController.IMAGE_CAPTURE
+            )
+        }
+    }
 
-    // Obtiene el directorio de imágenes públicas
-    val directorio = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absoluteFile
-
-    // Verifica los permisos cuando se crea el Composable
-    LaunchedEffect(key1 = Unit) {
+    LaunchedEffect(Unit) {
         permissions.launchMultiplePermissionRequest()
     }
 
-    // Muestra un botón flotante para tomar una foto
-    Scaffold(modifier = Modifier.fillMaxSize(),
+    Scaffold(
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    // Crea un ejecutor para manejar la toma de la foto
                     val executor = ContextCompat.getMainExecutor(context)
-                    // Toma una foto y la guarda en el directorio de imágenes públicas
-                    tomarFoto(camaraController, executor, directorio)
+                    tomarFotoMediaStore(
+                        context = context,
+                        cameraController = cameraController,
+                        executor = executor
+                    )
                 }
             ) {
-                // Muestra un icono de cámara
                 Icon(
-                    painterResource(id = R.drawable.icon_camera),
-                    tint = Color.White,
-                    contentDescription = null
+                    painter = painterResource(id = R.drawable.icon_camera),
+                    contentDescription = "Hacer foto",
+                    tint = Color.White
                 )
             }
         },
         floatingActionButtonPosition = FabPosition.Center
-    ) {
-        // Muestra la vista de la cámara si se han concedido los permisos
+    ) { padding ->
+
         if (permissions.allPermissionsGranted) {
-            CamaraComposable(
-                camaraController = camaraController,
-                lifecycleOwner = lifecycle,
-                modifier = Modifier.padding(it)
+            CamaraPreview(
+                cameraController = cameraController,
+                lifecycleOwner = lifecycleOwner,
+                modifier = Modifier.padding(padding)
             )
         } else {
-            // Muestra un mensaje si no se han concedido los permisos
-            Text(text = "Permisos no concedidos", modifier = Modifier.padding(it))
+            Text(
+                text = "Permiso de cámara no concedido",
+                modifier = Modifier.padding(padding)
+            )
         }
     }
-
 }
 
-@Composable
-fun CamaraComposable(
-    camaraController: LifecycleCameraController,
-    lifecycleOwner: LifecycleOwner,
-    modifier: Modifier
+private fun tomarFotoMediaStore(
+    context: Context,
+    cameraController: LifecycleCameraController,
+    executor: Executor
 ) {
-    // Vincula el controlador de cámara a la vida de la actividad
-    camaraController.bindToLifecycle(lifecycleOwner)
-    // Muestra la vista de previsualización de la cámara
-    AndroidView(
-        modifier = modifier,
-        factory = {
-            val previaView = PreviewView(it).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            }
-            previaView.controller = camaraController
-            previaView
-        }
-    )
-}
+    val contentValues = ContentValues().apply {
+        put(MediaStore.MediaColumns.DISPLAY_NAME, "img_${System.currentTimeMillis()}")
+        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+        put(
+            MediaStore.Images.Media.RELATIVE_PATH,
+            Environment.DIRECTORY_PICTURES + "/CameraX"
+        )
+    }
 
-// Función para tomar una foto y guardarla en el directorio de imágenes públicas
-private fun tomarFoto(
-    camaraController: LifecycleCameraController,
-    executor: Executor,
-    directorio: File
-) {
-    // Crea un archivo temporal para la foto
-    val image = File.createTempFile("img_", ".png", directorio)
-    // Crea opciones para guardar la foto en el archivo temporal
-    val outputDirectory = ImageCapture.OutputFileOptions.Builder(image).build()
-    // Toma la foto y guarda el resultado en el archivo temporal
-    camaraController.takePicture(
-        outputDirectory,
+    val outputOptions = ImageCapture.OutputFileOptions
+        .Builder(
+            context.contentResolver,
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            contentValues
+        )
+        .build()
+
+    cameraController.takePicture(
+        outputOptions,
         executor,
         object : ImageCapture.OnImageSavedCallback {
-            // Función que se llama cuando se guarda la foto
-            override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                // Muestra un mensaje en la consola para indicar que se ha guardado la foto
-                println("foto_tomada")
-                // Muestra la URI de la foto guardada en la consola
-                println(outputFileResults.savedUri)
+
+            override fun onImageSaved(
+                outputFileResults: ImageCapture.OutputFileResults
+            ) {
+                println("Foto guardada correctamente")
+                println("URI: ${outputFileResults.savedUri}")
             }
 
             override fun onError(exception: ImageCaptureException) {
-                println(exception.toString())
+                println("Error al guardar la foto: $exception")
             }
-
-
-
         }
     )
 }
 
+
 // Función de previsualización para mostrar la vista de la cámara en el diseñador
-@Preview(showBackground = true)
 @Composable
-fun GreetingPreview() {
-    Pm_capturar_fotoTheme {
-        CamaraView()
-    }
+fun CamaraPreview(
+    cameraController: LifecycleCameraController,
+    lifecycleOwner: LifecycleOwner,
+    modifier: Modifier = Modifier
+) {
+    cameraController.bindToLifecycle(lifecycleOwner)
+
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { context ->
+            PreviewView(context).apply {
+                controller = cameraController
+            }
+        }
+    )
 }
